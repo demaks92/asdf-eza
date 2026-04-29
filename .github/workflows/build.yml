@@ -13,11 +13,12 @@ jobs:
   plugin_test:
     name: asdf plugin test
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
       - name: asdf_plugin_test
-        uses: asdf-vm/actions/plugin-test@v1
+        uses: asdf-vm/actions/plugin-test@v3
         with:
           command: eza --version

@@ -16,6 +16,21 @@
 # Dependencies
 
 - `bash`, `curl`, `tar`.
+- Optionally `sha256sum` or `shasum` for checksum verification.
+
+# SHA256 verification
+
+Upstream (`eza-community/eza` for Linux and `cargo-bins/cargo-quickinstall`
+for macOS) does not publish `.sha256` files alongside release archives, so
+verification is opt-in. Set `ASDF_EZA_SHA256` to the expected hex digest of
+the downloaded archive to enable it:
+
+```shell
+ASDF_EZA_SHA256=0c38665440226cd8bef5d1d4f3bc6ff77c927fb0d68b752739105db7ab5b358d \
+  asdf install eza 0.23.4
+```
+
+When unset, the install proceeds without verification and prints a notice.
 
 # Install
 

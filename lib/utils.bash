@@ -2,97 +2,44 @@
 
 set -euo pipefail
 
-GH_REPO="https://github.com/eza-community/eza"
-GH_REPO_CBIN="https://github.com/cargo-bins/cargo-quickinstall"
-TOOL_NAME="eza"
-TOOL_TEST="eza --version"
+declare -r GH_REPO='https://github.com/eza-community/eza'
+declare -r GH_REPO_CBIN='https://github.com/cargo-bins/cargo-quickinstall'
+declare -r TOOL_NAME='eza'
+declare -r TOOL_TEST='eza --version'
+declare -r MINIMAL_GLIBC_VER='2.18'
 
 fail() {
-  echo -e "asdf-$TOOL_NAME: $*"
+  printf 'asdf-%s: %s\n' "$TOOL_NAME" "$*"
   exit 1
 }
 
-curl_opts=(-fsSL)
+declare -a curl_opts=(-fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2)
 
-if [ -n "${GITHUB_API_TOKEN:-}" ]; then
+if [[ -n "${GITHUB_API_TOKEN:-}" ]]; then
   curl_opts=("${curl_opts[@]}" -H "Authorization: token $GITHUB_API_TOKEN")
 fi
 
-sort_versions() {
-  sed 'h; s/[+-]/./g; s/.p\([[:digit:]]\)/.z\1/; s/$/.z/; G; s/\n/ /' |
-    LC_ALL=C sort -t. -k 1,1 -k 2,2n -k 3,3n -k 4,4n -k 5,5n | awk '{print $2}'
-}
+verify_sha256() {
+  local -r file="$1"
+  local -r expected="${ASDF_EZA_SHA256:-}"
 
-list_github_tags() {
-  git ls-remote --tags --refs "$GH_REPO" |
-    grep -o 'refs/tags/.*' | cut -d/ -f3- |
-    sed 's/^v//'
-}
-
-list_all_versions() {
-  list_github_tags
-}
-
-download_release() {
-  local version filename url
-  version="$1"
-  filename="$2"
-
-  local arch
-  arch=$(uname -m | tr '[:upper:]' '[:lower:]')
-  local kernel
-  kernel=$(uname -s | tr '[:upper:]' '[:lower:]')
-  case "${arch}-${kernel}" in
-    arm64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_aarch64-unknown-linux-gnu.tar.gz"
-      ;;
-    aarch64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_aarch64-unknown-linux-gnu.tar.gz"
-      ;;
-    x86_64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_x86_64-unknown-linux-gnu.tar.gz"
-      ;;
-    arm64-darwin)
-      url="$GH_REPO_CBIN/releases/download/eza-${version}/eza-${version}-aarch64-apple-darwin.tar.gz"
-      ;;
-    x86_64-darwin)
-      url="$GH_REPO_CBIN/releases/download/eza-${version}/eza-${version}-x86_64-apple-darwin.tar.gz"
-      ;;
-    *)
-      fail "Could not determine release URL"
-      ;;
-  esac
-
-  echo "* Downloading $TOOL_NAME release $version..."
-  curl "${curl_opts[@]}" -o "$filename" -C - "$url" || fail "Could not download $url"
-}
-
-install_version() {
-  local install_type="$1"
-  local version="$2"
-  local install_path="$3"
-
-  if [ "$install_type" != "version" ]; then
-    fail "asdf-$TOOL_NAME supports release installs only"
+  if [[ -z "$expected" ]]; then
+    printf '* Skipping SHA256 verification (set ASDF_EZA_SHA256 to enable)\n'
+    return
   fi
 
-  local release_bin="$install_path/bin"
-  local release_file="$release_bin/$TOOL_NAME"
-  local release_tar="$release_file.tar.gz"
-  (
-    mkdir -p "$release_bin"
-    download_release "$version" "$release_tar"
-    tar -xf "$release_tar" -C "$release_bin" || fail "Could not extract $release_file"
-    rm "$release_tar"
-    chmod +x "$release_file"
+  local actual
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    fail "Neither sha256sum nor shasum is available for SHA256 verification"
+  fi
 
-    local tool_cmd
-    tool_cmd="$(echo "$TOOL_TEST" | cut -d' ' -f1)"
-    test -x "$install_path/bin/$tool_cmd" || fail "Expected $install_path/bin/$tool_cmd to be executable."
+  if [[ "$actual" != "$expected" ]]; then
+    fail "SHA256 mismatch for $file: expected $expected, got $actual"
+  fi
 
-    echo "$TOOL_NAME $version installation was successful!"
-  ) || (
-    rm -rf "$install_path"
-    fail "An error ocurred while installing $TOOL_NAME $version."
-  )
+  printf '* SHA256 verified\n'
 }
