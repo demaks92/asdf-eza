@@ -60,21 +60,21 @@ download() {
 
   local url
   case "${arch}-${kernel}" in
-  arm64-linux | aarch64-linux)
-    url="$GH_REPO/releases/download/v${download_version}/eza_aarch64-unknown-linux-gnu.tar.gz"
-    ;;
-  x86_64-linux)
-    url="$GH_REPO/releases/download/v${download_version}/eza_x86_64-unknown-linux-$(detect_linux_x86_64_libc_type).tar.gz"
-    ;;
-  arm64-darwin)
-    url="$GH_REPO_CBIN/releases/download/eza-${download_version}/eza-${download_version}-aarch64-apple-darwin.tar.gz"
-    ;;
-  x86_64-darwin)
-    url="$GH_REPO_CBIN/releases/download/eza-${download_version}/eza-${download_version}-x86_64-apple-darwin.tar.gz"
-    ;;
-  *)
-    fail "Could not determine release URL for ${arch}-${kernel}"
-    ;;
+    arm64-linux | aarch64-linux)
+      url="$GH_REPO/releases/download/v${download_version}/eza_aarch64-unknown-linux-gnu.tar.gz"
+      ;;
+    x86_64-linux)
+      url="$GH_REPO/releases/download/v${download_version}/eza_x86_64-unknown-linux-$(detect_linux_x86_64_libc_type).tar.gz"
+      ;;
+    arm64-darwin)
+      url="$GH_REPO_CBIN/releases/download/eza-${download_version}/eza-${download_version}-aarch64-apple-darwin.tar.gz"
+      ;;
+    x86_64-darwin)
+      url="$GH_REPO_CBIN/releases/download/eza-${download_version}/eza-${download_version}-x86_64-apple-darwin.tar.gz"
+      ;;
+    *)
+      fail "Could not determine release URL for ${arch}-${kernel}"
+      ;;
   esac
 
   local -r tarball="${download_path}/${TOOL_NAME}.tar.gz"
