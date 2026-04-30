@@ -2,97 +2,120 @@
 
 set -euo pipefail
 
-GH_REPO="https://github.com/eza-community/eza"
-GH_REPO_CBIN="https://github.com/cargo-bins/cargo-quickinstall"
-TOOL_NAME="eza"
-TOOL_TEST="eza --version"
+declare -r GH_REPO='https://github.com/eza-community/eza'
+declare -r GH_API_REPO='https://api.github.com/repos/eza-community/eza'
+declare -r TOOL_NAME='eza'
+declare -r TOOL_TEST="${TOOL_NAME} --version"
+declare -r MINIMAL_GLIBC_VER='2.18'
 
 fail() {
-  echo -e "asdf-$TOOL_NAME: $*"
+  printf 'asdf-%s: %s\n' "$TOOL_NAME" "$*" >&2
   exit 1
 }
 
-curl_opts=(-fsSL)
+declare -a curl_opts=(-fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2)
 
-if [ -n "${GITHUB_API_TOKEN:-}" ]; then
+if [[ -n "${GITHUB_API_TOKEN:-}" ]]; then
   curl_opts=("${curl_opts[@]}" -H "Authorization: token $GITHUB_API_TOKEN")
 fi
 
-sort_versions() {
-  sed 'h; s/[+-]/./g; s/.p\([[:digit:]]\)/.z\1/; s/$/.z/; G; s/\n/ /' |
-    LC_ALL=C sort -t. -k 1,1 -k 2,2n -k 3,3n -k 4,4n -k 5,5n | awk '{print $2}'
-}
+# fetch_asset_sha256 <release_tag> <browser_download_url>
+# Prints the lowercase hex SHA-256 digest reported by the GitHub Releases API
+# for the asset whose browser_download_url matches the requested one.
+# Uses jq when available, falling back to python3, then to a pure-awk parser.
+fetch_asset_sha256() {
+  local -r release_tag="$1"
+  local -r asset_url="$2"
 
-list_github_tags() {
-  git ls-remote --tags --refs "$GH_REPO" |
-    grep -o 'refs/tags/.*' | cut -d/ -f3- |
-    sed 's/^v//'
-}
+  command -v curl >/dev/null 2>&1 || fail 'curl is required to fetch release metadata'
 
-list_all_versions() {
-  list_github_tags
-}
+  local payload
+  payload="$(
+    curl "${curl_opts[@]}" -H 'Accept: application/vnd.github+json' \
+      "${GH_API_REPO}/releases/tags/${release_tag}"
+  )" || fail "Could not query GitHub API for release ${release_tag}"
 
-download_release() {
-  local version filename url
-  version="$1"
-  filename="$2"
-
-  local arch
-  arch=$(uname -m | tr '[:upper:]' '[:lower:]')
-  local kernel
-  kernel=$(uname -s | tr '[:upper:]' '[:lower:]')
-  case "${arch}-${kernel}" in
-    arm64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_aarch64-unknown-linux-gnu.tar.gz"
-      ;;
-    aarch64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_aarch64-unknown-linux-gnu.tar.gz"
-      ;;
-    x86_64-linux)
-      url="$GH_REPO/releases/download/v${version}/eza_x86_64-unknown-linux-gnu.tar.gz"
-      ;;
-    arm64-darwin)
-      url="$GH_REPO_CBIN/releases/download/eza-${version}/eza-${version}-aarch64-apple-darwin.tar.gz"
-      ;;
-    x86_64-darwin)
-      url="$GH_REPO_CBIN/releases/download/eza-${version}/eza-${version}-x86_64-apple-darwin.tar.gz"
-      ;;
-    *)
-      fail "Could not determine release URL"
-      ;;
-  esac
-
-  echo "* Downloading $TOOL_NAME release $version..."
-  curl "${curl_opts[@]}" -o "$filename" -C - "$url" || fail "Could not download $url"
-}
-
-install_version() {
-  local install_type="$1"
-  local version="$2"
-  local install_path="$3"
-
-  if [ "$install_type" != "version" ]; then
-    fail "asdf-$TOOL_NAME supports release installs only"
+  local digest=''
+  if command -v jq >/dev/null 2>&1; then
+    digest="$(
+      printf '%s' "$payload" |
+        jq -r --arg url "$asset_url" \
+          '.assets[] | select(.browser_download_url == $url) | .digest // empty'
+    )"
+  elif command -v python3 >/dev/null 2>&1; then
+    digest="$(
+      ASSET_URL="$asset_url" python3 -c '
+import json, os, sys
+data = json.load(sys.stdin)
+url = os.environ["ASSET_URL"]
+for asset in data.get("assets", []):
+    if asset.get("browser_download_url") == url:
+        print(asset.get("digest") or "")
+        break
+' <<<"$payload"
+    )"
+  else
+    # Last-resort dependency-free parser: normalize JSON whitespace, split on
+    # asset object boundaries, then locate the object whose
+    # browser_download_url matches and pull its digest field.
+    digest="$(
+      printf '%s' "$payload" |
+        awk -v url="$asset_url" '
+          { doc = doc " " $0 }
+          END {
+            gsub(/[[:space:]]+/, " ", doc)
+            gsub(/" *: */, "\":", doc)
+            gsub(/, */, ",", doc)
+            gsub(/{ */, "{", doc)
+            gsub(/ *}/, "}", doc)
+            n = split(doc, parts, /},{/)
+            for (i = 1; i <= n; i++) {
+              if (index(parts[i], "\"browser_download_url\":\"" url "\"") > 0) {
+                if (match(parts[i], /"digest":"[^"]+"/)) {
+                  print substr(parts[i], RSTART + 10, RLENGTH - 11)
+                  exit
+                }
+              }
+            }
+          }
+        '
+    )"
   fi
 
-  local release_bin="$install_path/bin"
-  local release_file="$release_bin/$TOOL_NAME"
-  local release_tar="$release_file.tar.gz"
-  (
-    mkdir -p "$release_bin"
-    download_release "$version" "$release_tar"
-    tar -xf "$release_tar" -C "$release_bin" || fail "Could not extract $release_file"
-    rm "$release_tar"
-    chmod +x "$release_file"
+  # Older releases (published before GitHub added per-asset digests in
+  # February 2025) have no digest field. Warn and return empty so the caller
+  # can decide to skip verification.
+  if [[ -z "$digest" ]]; then
+    printf 'asdf-%s: warning: GitHub API reports no SHA256 digest for %s (release %s); skipping checksum verification\n' \
+      "$TOOL_NAME" "${asset_url##*/}" "$release_tag" >&2
+    return 0
+  fi
 
-    local tool_cmd
-    tool_cmd="$(echo "$TOOL_TEST" | cut -d' ' -f1)"
-    test -x "$install_path/bin/$tool_cmd" || fail "Expected $install_path/bin/$tool_cmd to be executable."
+  [[ "$digest" == sha256:* ]] ||
+    fail "Unexpected digest algorithm for ${asset_url}: ${digest}"
 
-    echo "$TOOL_NAME $version installation was successful!"
-  ) || (
-    rm -rf "$install_path"
-    fail "An error ocurred while installing $TOOL_NAME $version."
-  )
+  printf '%s' "${digest#sha256:}"
+}
+
+# verify_sha256 <file> <expected_hex>
+verify_sha256() {
+  local -r file="$1"
+  local -r expected="$2"
+
+  [[ -n "$expected" ]] || fail "Empty expected SHA256 for $file"
+
+  local actual
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    fail 'Neither sha256sum nor shasum is available for SHA256 verification'
+  fi
+
+  if [[ "${actual,,}" != "${expected,,}" ]]; then
+    fail "SHA256 mismatch for $file: expected $expected, got $actual"
+  fi
+
+  printf '* SHA256 verified (%s)\n' "$actual"
 }

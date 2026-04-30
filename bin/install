@@ -3,6 +3,37 @@
 set -euo pipefail
 
 # shellcheck source=../lib/utils.bash
-source "$(dirname "$0")/../lib/utils.bash"
+. "$(dirname "$0")/../lib/utils.bash"
 
-install_version "$ASDF_INSTALL_TYPE" "$ASDF_INSTALL_VERSION" "$ASDF_INSTALL_PATH"
+install() {
+  local -r install_type="$1"
+  local -r download_path="$2"
+  local -r version="$3"
+  local -r install_path="$4"
+
+  if [[ "$install_type" != "version" ]]; then
+    fail "asdf-$TOOL_NAME supports release installs only"
+  fi
+
+  local -r release_bin="$install_path/bin"
+  local -r release_file="$release_bin/$TOOL_NAME"
+
+  cleanup() {
+    local -r rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      rm -rf "$install_path"
+      printf 'asdf-%s: An error occurred while installing %s %s\n' "$TOOL_NAME" "$TOOL_NAME" "$version" >&2
+    fi
+  }
+  trap cleanup EXIT
+
+  mkdir -p "$release_bin"
+  mv "$download_path/$TOOL_NAME" "$release_file"
+  chmod +x "$release_file"
+
+  [[ -x "$release_file" ]] || fail "Expected $release_file to be executable."
+
+  printf '%s %s installation was successful!\n' "$TOOL_NAME" "$version"
+}
+
+install "$ASDF_INSTALL_TYPE" "$ASDF_DOWNLOAD_PATH" "$ASDF_INSTALL_VERSION" "$ASDF_INSTALL_PATH"

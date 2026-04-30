@@ -16,6 +16,23 @@
 # Dependencies
 
 - `bash`, `curl`, `tar`.
+- `sha256sum` or `shasum` for checksum verification.
+- One of `jq`, `python3`, or `awk` to parse the GitHub Releases API
+  response (any modern Linux ships at least `awk`).
+- Linux only: upstream `eza-community/eza` publishes release binaries
+  exclusively for Linux (glibc/musl on `x86_64`, glibc on `aarch64`).
+  Other platforms are not supported by this plugin.
+
+# SHA256 verification
+
+Every download is verified against the SHA-256 digest reported by the
+GitHub Releases API (`assets[].digest` field). The digest is fetched
+before the archive is downloaded and compared against the locally
+computed hash; a mismatch aborts the install.
+
+GitHub started populating per-asset digests in February 2025. For older
+releases the API returns no digest — in that case the plugin prints a
+warning and proceeds without verification.
 
 # Install
 

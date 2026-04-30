@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=../lib/utils.bash
+. "${plugin_dir}/../lib/utils.bash"
+
+version_less_than() {
+  local version_major version_minor minimum_major minimum_minor
+
+  IFS=. read -r version_major version_minor _ <<<"$1"
+  IFS=. read -r minimum_major minimum_minor _ <<<"$2"
+
+  version_major=${version_major:-0}
+  version_minor=${version_minor:-0}
+  minimum_major=${minimum_major:-0}
+  minimum_minor=${minimum_minor:-0}
+
+  ((version_major < minimum_major || (\
+  version_major == minimum_major && \
+  version_minor < minimum_minor)))
+}
+
+detect_linux_x86_64_libc_type() {
+  local glibc_current_ver glibc_path
+
+  # Fast path: ldd reports musl directly on Alpine and similar.
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | head -n1 | grep -qi 'musl'; then
+    printf 'musl'
+    return
+  fi
+
+  glibc_path=$(LD_TRACE_LOADED_OBJECTS=1 /bin/sh 2>/dev/null |
+    awk '$1=="libc.so.6" && $2=="=>"{print $3; exit}')
+
+  if [[ -z "$glibc_path" ]] || [[ ! -x "$glibc_path" ]]; then
+    printf 'musl'
+    return
+  fi
+
+  glibc_current_ver=$("$glibc_path" 2>/dev/null |
+    sed -n 's/.*stable release version \([0-9][0-9.]*[0-9]\).*/\1/p')
+
+  if [[ -z "$glibc_current_ver" ]] || version_less_than "$glibc_current_ver" "$MINIMAL_GLIBC_VER"; then
+    printf 'musl'
+    return
+  fi
+
+  printf 'gnu'
+}
+
+download() {
+  local -r download_version="$1"
+  local -r download_path="$2"
+
+  local -r arch=$(uname -m | tr '[:upper:]' '[:lower:]')
+  local -r kernel=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+  local -r -a required_tools=('curl' 'tar')
+
+  for tool in "${required_tools[@]}"; do
+    if ! type "$tool" &>/dev/null; then
+      fail "$tool not found"
+    fi
+  done
+
+  local url
+  local -r release_tag="v${download_version}"
+  case "${arch}-${kernel}" in
+    arm64-linux | aarch64-linux)
+      url="$GH_REPO/releases/download/${release_tag}/eza_aarch64-unknown-linux-gnu.tar.gz"
+      ;;
+    x86_64-linux)
+      url="$GH_REPO/releases/download/${release_tag}/eza_x86_64-unknown-linux-$(detect_linux_x86_64_libc_type).tar.gz"
+      ;;
+    *)
+      fail "Unsupported platform ${arch}-${kernel}: upstream eza only publishes Linux release binaries"
+      ;;
+  esac
+
+  local -r tarball="${download_path}/${TOOL_NAME}.tar.gz"
+
+  [[ -d "$download_path" ]] || mkdir -p "$download_path"
+
+  printf '* Fetching SHA256 digest for %s from GitHub API...\n' "${url##*/}"
+  local expected_sha256
+  expected_sha256="$(fetch_asset_sha256 "$release_tag" "$url")"
+
+  printf '* Downloading %s release %s...\n' "$TOOL_NAME" "$download_version"
+  curl "${curl_opts[@]}" -o "$tarball" "$url" || fail "Could not download $url"
+
+  if [[ -n "$expected_sha256" ]]; then
+    verify_sha256 "$tarball" "$expected_sha256"
+  fi
+
+  printf '* Extracting %s release %s...\n' "$TOOL_NAME" "$download_version"
+  tar -xzf "$tarball" -C "$download_path" || fail "Could not extract $tarball"
+
+  rm -f "$tarball"
+}
+
+download "$ASDF_INSTALL_VERSION" "$ASDF_DOWNLOAD_PATH"
